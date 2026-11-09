@@ -37,7 +37,7 @@ import { createOutputFilePath, ensureOutputFile, getOutputTranscriptDefault, ses
 import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, packageNameForPath, seedProjectTrust, setPackageAgentsGate, setPackageWorkflowsGate, setProjectTrusted } from "./package-resources.js";
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
-import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
+import { applyAndEmitLoaded, loadSettings, MAX_MINUTES_CEILING, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
 import { describeNow, getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
@@ -1741,6 +1741,7 @@ Terse command-style prompts produce shallow, generic work.
         Type.Number({
           description: "Minutes each run may take before it is stopped as an error. Omit for the configured default.",
           exclusiveMinimum: 0,
+          maximum: MAX_MINUTES_CEILING,
         }),
       ),
       run_in_background: Type.Optional(

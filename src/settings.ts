@@ -392,7 +392,7 @@ const VALID_AGENT_MENTION_MODES: ReadonlySet<string> = new Set<AgentMentionMode>
 const MAX_CONCURRENT_CEILING = 1024;
 const MAX_TURNS_CEILING = 10_000;
 const GRACE_TURNS_CEILING = 1_000;
-const MAX_MINUTES_CEILING = 7 * 24 * 60;
+export const MAX_MINUTES_CEILING = 7 * 24 * 60;
 const SUBAGENT_DEPTH_CEILING = 16;
 
 /**

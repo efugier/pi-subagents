@@ -8,7 +8,7 @@ vi.mock("../src/agent-runner.js", () => ({
   resumeAgent: vi.fn(),
 }));
 
-import { runAgent } from "../src/agent-runner.js";
+import { resumeAgent, runAgent } from "../src/agent-runner.js";
 
 const mockPi = {} as any;
 const mockCtx = { cwd: "/tmp" } as any;
@@ -58,6 +58,35 @@ describe("time limit", () => {
     manager.abort(unlimited.id);
     await unlimited.promise;
     expect(unlimited.status).toBe("stopped");
+  });
+
+  it("stops a foreground resume at the time limit too", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({ responseText: "first", session: { dispose: vi.fn() }, aborted: false, steered: false } as any);
+    const record = manager.getRecord(manager.spawn(mockPi, mockCtx, "general-purpose", "p", {
+      description: "d", isBackground: true, maxMinutes: 0.001,
+    }))!;
+    await record.promise;
+    expect(record.status).toBe("completed");
+    vi.mocked(resumeAgent).mockImplementation((_session, _prompt, options: any) =>
+      new Promise((resolve) => {
+        options.signal.addEventListener("abort", () => resolve({ text: "half" }));
+      }));
+    await manager.resume(record.id, "again");
+    expect(record.status).toBe("error");
+    expect(record.error).toMatch(/^Stopped after 0.001 minutes/);
+  });
+
+  it("caps a huge limit at the longest timer Node keeps", async () => {
+    manager = new AgentManager();
+    hangingRun();
+    const record = manager.getRecord(manager.spawn(mockPi, mockCtx, "general-purpose", "p", {
+      description: "d", isBackground: true, maxMinutes: 99_999,
+    }))!;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(record.status).toBe("running");
+    manager.abort(record.id);
+    await record.promise;
   });
 
   it("leaves a user stop a stop", async () => {

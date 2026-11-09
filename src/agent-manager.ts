@@ -360,6 +360,11 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
   try { session?.dispose?.(); } catch { /* ignore */ }
 }
 
+/** A timer longer than Node's 32-bit limit would fire at once. */
+function timeLimitMs(minutes: number): number {
+  return Math.min(minutes * 60_000, 2 ** 31 - 1);
+}
+
 function timeLimitError(record: AgentRecord): string {
   return `Stopped after ${record.maxMinutes} minutes, this agent's time limit (max_minutes). ` +
     "It did not finish; any output is partial.";
@@ -1032,7 +1037,7 @@ export class AgentManager {
       if (record.status !== "running" || record.abortController !== controller) return;
       record.timedOut = true;
       controller?.abort();
-    }, record.maxMinutes * 60_000);
+    }, timeLimitMs(record.maxMinutes));
     record.timeLimit.unref?.();
   }
 
@@ -1297,12 +1302,14 @@ export class AgentManager {
       return record;
     }
 
-    // Foreground resume: run inline and return the settled record.
+    // Foreground resume: run inline and return the settled record. Its caller's
+    // signal stops it; so does the time limit, through a signal of its own.
     record.status = "running";
     record.startedAt = Date.now();
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
+    const limit = record.maxMinutes ? AbortSignal.timeout(timeLimitMs(record.maxMinutes)) : undefined;
 
     try {
       const { text, failure } = await resumeAgent(record.session, prompt, {
@@ -1320,17 +1327,18 @@ export class AgentManager {
           this.onCompact?.(record, info);
           options?.onCompaction?.(info);
         },
-        signal,
+        signal: limit && signal ? AbortSignal.any([signal, limit]) : limit ?? signal,
       });
       // Same contract as the spawn path (#144): a failed final turn is an
       // error, not a completion — but the resumed text stays available.
-      record.status = failure ? "error" : "completed";
-      if (failure) record.error = failure;
+      const error = limit?.aborted ? timeLimitError(record) : failure;
+      record.status = error ? "error" : "completed";
+      if (error) record.error = error;
       record.result = text;
       record.completedAt = Date.now();
     } catch (err) {
       record.status = "error";
-      record.error = err instanceof Error ? err.message : String(err);
+      record.error = limit?.aborted ? timeLimitError(record) : err instanceof Error ? err.message : String(err);
       record.completedAt = Date.now();
     }
 
