@@ -2105,23 +2105,24 @@ Terse command-style prompts produce shallow, generic work.
           return textResult(`Agent "${params.resume}" has no active session to resume.`);
         }
 
+        // A detached resume hands control back while the record stays
+        // "running", so nothing stops the model from resuming the same agent
+        // again mid-run, in either mode. manager.resume() refuses that (it would
+        // orphan the live run's abort controller and time limit); say why here,
+        // where the model can act on it, instead of a generic failure.
+        if (existing.status === "running" || existing.status === "queued") {
+          return textResult(
+            `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
+            `Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.`,
+          );
+        }
+
         // Background resume: detached run that notifies on completion, mirroring
         // a background spawn. Previously run_in_background was silently ignored
         // on resume (this branch returned before the background branch below),
         // so a resumed agent always blocked the main loop until it finished.
         if (runInBackground) {
           const id = existing.id;
-          // A detached resume hands control back while the record stays
-          // "running", so nothing stops the model from resuming the same agent
-          // again mid-run. manager.resume() refuses that (it would orphan the
-          // live run's abort controller); say why here, where the model can act
-          // on it, instead of letting it read as a generic failure.
-          if (existing.status === "running" || existing.status === "queued") {
-            return textResult(
-              `Agent "${params.resume}" is still ${existing.status} — it can only be resumed once its current run finishes.\n` +
-              `Use steer_subagent to send it a message mid-run, or get_subagent_result to wait for it.`,
-            );
-          }
 
           const record = await startBackgroundResume(ctx, existing, params.prompt, {
             outputTranscript,
@@ -2155,7 +2156,7 @@ Terse command-style prompts produce shallow, generic work.
           return textResult(`Agent failed: ${record.error}${partialOutputSuffix(record)}`, buildDetails(detailBaseFor(record), record));
         }
         return textResult(
-          record.result?.trim() || "No output.",
+          (record.result?.trim() || "No output.") + getForegroundOutcomeNote(record.status),
           buildDetails(detailBaseFor(record), record),
         );
       }

@@ -374,7 +374,7 @@ export function createWorkflowHost(deps: WorkflowHostOptions): WorkflowHost {
       if (record === undefined) {
         return {
           ok: false,
-          error: `Agent ${id} has no session left to resume — records are dropped ten minutes after they finish.`,
+          error: `Agent ${id} cannot be resumed: it is still running, or its session is gone — records are dropped ten minutes after they finish.`,
         };
       }
       // The resumed row is built from scratch, so it has to be told the same

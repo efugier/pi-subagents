@@ -94,6 +94,19 @@ describe("time limit", () => {
     expect(record.status).toBe("stopped");
   });
 
+  it("refuses a foreground resume of a running agent, keeping its limit and stop", async () => {
+    manager = new AgentManager();
+    hangingRun();
+    const record = manager.getRecord(manager.spawn(mockPi, mockCtx, "general-purpose", "p", {
+      description: "d", isBackground: true, maxMinutes: 0.002,
+    }))!;
+    const controller = record.abortController;
+    expect(await manager.resume(record.id, "again")).toBeUndefined();
+    expect(record.abortController).toBe(controller);
+    await record.promise;
+    expect(record.error).toMatch(/^Stopped after 0.002 minutes/);
+  });
+
   it("ignores a limit that is not positive", () => {
     manager = new AgentManager();
     hangingRun();
