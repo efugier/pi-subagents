@@ -693,7 +693,7 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, max foreg
 
 **Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max concurrency `10`, max foreground concurrency `0` = unlimited, default max turns unlimited, grace turns `5`, nested depth `2`, join mode `smart`, defaults enabled).
 
-**Time limit** (`defaultMaxMinutes`, default `0` = none): minutes each run of an agent, a spawn or a resume, may take. When it runs out the run is aborted, which reaches the model call or tool in flight, and it ends as an error saying so, with any partial output; a user stop stays a stop. An `Agent` call's `max_minutes` overrides it for that agent. Read at startup; set it in `subagents.json`.
+**Time limit** (`defaultMaxMinutes`, default `0` = none): minutes each run of an agent, a spawn or a resume, may take. When it runs out the run is aborted, which reaches the model call or tool in flight, and it ends as an error saying so, with any partial output; a user stop stays a stop. An `Agent` call's `max_minutes` overrides it for that agent, and a background spawn's result shows the limit in effect. At most a week. Read at startup; set it in `subagents.json`.
 
 **Nested depth** (`maxSubagentDepth`, default `2`): the hard ceiling on [nested delegation](#nested-subagents), counted from the main session (main = 0, its subagents = 1). `0` or `1` disables nesting project-wide regardless of any agent's `allowed_subagents`. Read when a subagent session is built, so a change applies to agents started after it.
 

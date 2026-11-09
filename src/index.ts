@@ -1739,7 +1739,7 @@ Terse command-style prompts produce shallow, generic work.
       ),
       max_minutes: Type.Optional(
         Type.Number({
-          description: "Minutes each run may take before it is stopped as an error. Omit for the configured default.",
+          description: "Minutes each run of this agent, its resumes included, may take before it is stopped as an error. Omit for the configured default, which the result shows.",
           exclusiveMinimum: 0,
           maximum: MAX_MINUTES_CEILING,
         }),
@@ -2172,6 +2172,7 @@ Terse command-style prompts produce shallow, generic work.
           `Description: ${params.description}\n` +
           (record?.outputFile ? `Output file: ${record.outputFile}\n` : "") +
           (isQueued ? `Position: queued (max ${manager.getMaxConcurrent()} concurrent)\n` : "") +
+          (record?.maxMinutes ? `Time limit: ${record.maxMinutes} min per run (max_minutes)\n` : "") +
           `\nYou will be notified when this agent completes.\n` +
           `Use get_subagent_result to retrieve full results, or steer_subagent to send it messages.\n` +
           `Do not duplicate this agent's work.`,

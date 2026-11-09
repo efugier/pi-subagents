@@ -77,6 +77,33 @@ describe("time limit", () => {
     expect(record.error).toMatch(/^Stopped after 0.001 minutes/);
   });
 
+  it("lets a stop reach a foreground resume", async () => {
+    manager = new AgentManager();
+    vi.mocked(runAgent).mockResolvedValue({ responseText: "first", session: { dispose: vi.fn() }, aborted: false, steered: false } as any);
+    const record = manager.getRecord(manager.spawn(mockPi, mockCtx, "general-purpose", "p", {
+      description: "d", isBackground: true,
+    }))!;
+    await record.promise;
+    vi.mocked(resumeAgent).mockImplementation((_session, _prompt, options: any) =>
+      new Promise((resolve) => {
+        options.signal.addEventListener("abort", () => resolve({ text: "half" }));
+      }));
+    const resumed = manager.resume(record.id, "again");
+    expect(manager.abort(record.id)).toBe(true);
+    await resumed;
+    expect(record.status).toBe("stopped");
+  });
+
+  it("ignores a limit that is not positive", () => {
+    manager = new AgentManager();
+    hangingRun();
+    const record = manager.getRecord(manager.spawn(mockPi, mockCtx, "general-purpose", "p", {
+      description: "d", isBackground: true, maxMinutes: -5,
+    }))!;
+    expect(record.maxMinutes).toBeUndefined();
+    manager.abort(record.id);
+  });
+
   it("caps a huge limit at the longest timer Node keeps", async () => {
     manager = new AgentManager();
     hangingRun();

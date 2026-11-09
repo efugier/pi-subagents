@@ -23,6 +23,7 @@ import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
 import { getAgentConfig } from "./agent-types.js";
 import { assignHandle, handleBase } from "./mention.js";
 import { describeModel } from "./model-resolver.js";
+import { MAX_MINUTES_CEILING } from "./settings.js";
 import type { AgentInvocation, AgentRecord, AgentTombstone, IsolationMode, MentionResolution, Pool, SubagentType, ThinkingLevel } from "./types.js";
 import { addUsage, type LifetimeUsage } from "./usage.js";
 import type { CompiledSchema } from "./workflow/json-schema.js";
@@ -360,9 +361,9 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
   try { session?.dispose?.(); } catch { /* ignore */ }
 }
 
-/** A timer longer than Node's 32-bit limit would fire at once. */
-function timeLimitMs(minutes: number): number {
-  return Math.min(minutes * 60_000, 2 ** 31 - 1);
+/** A usable time limit: positive and at most a week, whose timer Node keeps. */
+function validMinutes(minutes: number | undefined): number | undefined {
+  return minutes && minutes > 0 ? Math.min(minutes, MAX_MINUTES_CEILING) : undefined;
 }
 
 function timeLimitError(record: AgentRecord): string {
@@ -471,7 +472,7 @@ export class AgentManager {
 
   /** Default minutes a run may take before it is stopped; undefined or 0 = no limit. */
   setDefaultMaxMinutes(n: number | undefined) {
-    this.defaultMaxMinutes = n || undefined;
+    this.defaultMaxMinutes = validMinutes(n);
   }
 
   getDefaultMaxMinutes(): number | undefined {
@@ -567,7 +568,7 @@ export class AgentManager {
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
       compactionCount: 0,
-      maxMinutes: (options.maxMinutes ?? this.defaultMaxMinutes) || undefined,
+      maxMinutes: validMinutes(options.maxMinutes ?? this.defaultMaxMinutes),
       // Raw tri-state (not coerced to a boolean): true = background, false =
       // foreground (has an inline tool-result surface), undefined = caller never
       // declared it (e.g. a cross-extension RPC spawn). The widget's background-
@@ -1037,7 +1038,7 @@ export class AgentManager {
       if (record.status !== "running" || record.abortController !== controller) return;
       record.timedOut = true;
       controller?.abort();
-    }, timeLimitMs(record.maxMinutes));
+    }, record.maxMinutes * 60_000);
     record.timeLimit.unref?.();
   }
 
@@ -1302,14 +1303,19 @@ export class AgentManager {
       return record;
     }
 
-    // Foreground resume: run inline and return the settled record. Its caller's
-    // signal stops it; so does the time limit, through a signal of its own.
+    // Foreground resume: run inline and return the settled record. Its own
+    // controller, as for a background run, lets a stop and the time limit
+    // reach it as well as its caller's signal.
     record.status = "running";
     record.startedAt = Date.now();
     record.completedAt = undefined;
     record.result = undefined;
     record.error = undefined;
-    const limit = record.maxMinutes ? AbortSignal.timeout(timeLimitMs(record.maxMinutes)) : undefined;
+    const abortController = new AbortController();
+    record.abortController = abortController;
+    this.armTimeLimit(record);
+    // A call, so that the check after the await is not narrowed to "running".
+    const stopped = () => record.status === "stopped";
 
     try {
       const { text, failure } = await resumeAgent(record.session, prompt, {
@@ -1327,20 +1333,24 @@ export class AgentManager {
           this.onCompact?.(record, info);
           options?.onCompaction?.(info);
         },
-        signal: limit && signal ? AbortSignal.any([signal, limit]) : limit ?? signal,
+        signal: signal ? AbortSignal.any([signal, abortController.signal]) : abortController.signal,
       });
       // Same contract as the spawn path (#144): a failed final turn is an
       // error, not a completion — but the resumed text stays available.
-      const error = limit?.aborted ? timeLimitError(record) : failure;
-      record.status = error ? "error" : "completed";
-      if (error) record.error = error;
+      if (!stopped()) {
+        const error = record.timedOut ? timeLimitError(record) : failure;
+        record.status = error ? "error" : "completed";
+        if (error) record.error = error;
+      }
       record.result = text;
-      record.completedAt = Date.now();
     } catch (err) {
-      record.status = "error";
-      record.error = limit?.aborted ? timeLimitError(record) : err instanceof Error ? err.message : String(err);
-      record.completedAt = Date.now();
+      if (!stopped()) {
+        record.status = "error";
+        record.error = record.timedOut ? timeLimitError(record) : err instanceof Error ? err.message : String(err);
+      }
     }
+    clearTimeout(record.timeLimit);
+    record.completedAt ??= Date.now();
 
     // Same contract as the spawn settle paths: children spawned during the
     // resumed turn must not outlive it — nothing else can see or reach them.
