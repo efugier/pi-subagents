@@ -88,3 +88,20 @@ export function partialOutputSuffix(record: AgentRecord): string {
   const partial = record.result?.trim();
   return partial ? `\n\nPartial output before the failure:\n${partial}` : "";
 }
+
+/**
+ * What a running agent is doing and for how long — "running bash since 09:56
+ * (4h 14m)" or "waiting on the model since 14:03 (12m)", the model's time
+ * counted from its request or last streamed output — so a parent can tell a
+ * hung call from work. Undefined when the agent is not running.
+ */
+export function describeNow(record: AgentRecord, now = Date.now()): string | undefined {
+  if (record.status !== "running" || !record.now) return undefined;
+  const { tool, since } = record.now;
+  const minutes = Math.floor((now - since) / 60_000);
+  const elapsed = minutes >= 60
+    ? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+    : minutes > 0 ? `${minutes}m` : `${Math.max(0, Math.floor((now - since) / 1000))}s`;
+  const at = new Date(since).toTimeString().slice(0, 5);
+  return `${tool ? `running ${tool}` : "waiting on the model"} since ${at} (${elapsed})`;
+}

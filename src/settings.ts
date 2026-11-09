@@ -38,6 +38,11 @@ export interface SubagentsSettings {
    * `/agents` → Settings input prompt explicitly says "0 = unlimited".
    */
   defaultMaxTurns?: number;
+  /**
+   * Minutes each run may take before it is stopped as an error, unless the
+   * `Agent` call sets `max_minutes`. 0 = no limit, the default.
+   */
+  defaultMaxMinutes?: number;
   graceTurns?: number;
   defaultJoinMode?: JoinMode;
   /**
@@ -346,6 +351,7 @@ export interface SettingsAppliers {
   setMaxConcurrent: (n: number) => void;
   setMaxConcurrentForeground: (n: number) => void;
   setDefaultMaxTurns: (n: number) => void;
+  setDefaultMaxMinutes: (n: number) => void;
   setGraceTurns: (n: number) => void;
   setDefaultJoinMode: (mode: JoinMode) => void;
   setBackgroundByDefault: (b: boolean) => void;
@@ -386,6 +392,7 @@ const VALID_AGENT_MENTION_MODES: ReadonlySet<string> = new Set<AgentMentionMode>
 const MAX_CONCURRENT_CEILING = 1024;
 const MAX_TURNS_CEILING = 10_000;
 const GRACE_TURNS_CEILING = 1_000;
+const MAX_MINUTES_CEILING = 7 * 24 * 60;
 const SUBAGENT_DEPTH_CEILING = 16;
 
 /**
@@ -434,6 +441,13 @@ function sanitize(raw: unknown): SubagentsSettings {
     (r.defaultMaxTurns as number) <= MAX_TURNS_CEILING
   ) {
     out.defaultMaxTurns = r.defaultMaxTurns as number;
+  }
+  if (
+    typeof r.defaultMaxMinutes === "number" &&
+    r.defaultMaxMinutes >= 0 &&
+    r.defaultMaxMinutes <= MAX_MINUTES_CEILING
+  ) {
+    out.defaultMaxMinutes = r.defaultMaxMinutes;
   }
   if (
     Number.isInteger(r.graceTurns) &&
@@ -576,6 +590,7 @@ export function applySettings(s: SubagentsSettings, appliers: SettingsAppliers):
     appliers.setMaxConcurrentForeground(s.maxConcurrentForeground);
   }
   if (typeof s.defaultMaxTurns === "number") appliers.setDefaultMaxTurns(s.defaultMaxTurns);
+  if (typeof s.defaultMaxMinutes === "number") appliers.setDefaultMaxMinutes(s.defaultMaxMinutes);
   if (typeof s.graceTurns === "number") appliers.setGraceTurns(s.graceTurns);
   if (typeof s.maxSubagentDepth === "number") appliers.setMaxSubagentDepth(s.maxSubagentDepth);
   if (typeof s.fallbackSubagent === "string") appliers.setFallbackSubagent(s.fallbackSubagent);

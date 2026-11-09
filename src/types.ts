@@ -249,6 +249,17 @@ export interface AgentRecord {
   /** Number of times this agent's session has compacted. Initialized to 0 at spawn. */
   compactionCount: number;
   /**
+   * What a running agent is doing: its oldest running tool call, else the
+   * model, `since` its request or last streamed output. Kept by `trackNow` from
+   * the session's events, so a parent can tell a hung call from work.
+   */
+  now?: { tool?: string; since: number };
+  /** Minutes each run may take before it is stopped as an error; undefined for no limit. */
+  maxMinutes?: number;
+  /** The current run's time-limit timer, and whether it fired. */
+  timeLimit?: ReturnType<typeof setTimeout>;
+  timedOut?: boolean;
+  /**
    * Whether this agent runs in the background. Tri-state, initialized at spawn
    * from `SpawnOptions.isBackground` and flipped `false` → `true` (once, never
    * back) by `sendToBackground`: `true` = background, `false` =

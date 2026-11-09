@@ -484,6 +484,7 @@ Launch a sub-agent.
 | `model` | string | no | Model — `provider/modelId` or fuzzy name (`"haiku"`, `"sonnet"`). Resolved tolerantly (`.`/`-` and a trailing date stamp interchangeable) with provider fallback |
 | `thinking` | string | no | Thinking level: off, minimal, low, medium, high, xhigh, max (availability depends on pi version and model) |
 | `max_turns` | number | no | Max agentic turns. Omit for unlimited (default) |
+| `max_minutes` | number | no | Minutes each run may take before it is stopped as an error. Omit for [`defaultMaxMinutes`](#persistent-settings) |
 | `run_in_background` | boolean | no | Defaults to `true`; `false` blocks and returns the result inline, until [`ctrl+b`](#sending-a-foreground-agent-to-the-background) hands it to the background |
 | `resume` | string | no | Agent ID to resume a previous session |
 | `isolated` | boolean | no | No extension/MCP tools |
@@ -540,6 +541,8 @@ Check status and retrieve results from a background agent.
 | `verbose` | boolean | no | Include full conversation log |
 
 Cancelling a `wait: true` call (for example, with `Esc`) stops only the wait. The background agent keeps running, and its completion notification still arrives normally.
+
+For a running agent it says what the agent is doing and since when: `running bash since 09:56 (4h 14m)`, or `waiting on the model since 14:03 (12m)`, counted from the model request or its last streamed output. `steer_subagent` adds the same to its reply. A long wait on one call tells a hung command or provider from work.
 
 ### `steer_subagent`
 
@@ -689,6 +692,8 @@ Runtime tuning values set via `/agents` → Settings (max concurrency, max foreg
 - **Project:** `<cwd>/.pi/subagents.json` — per-project overrides. Written by `/agents` → Settings.
 
 **Precedence:** project overrides global on any field present in both. Missing fields fall back to the hardcoded defaults (max concurrency `10`, max foreground concurrency `0` = unlimited, default max turns unlimited, grace turns `5`, nested depth `2`, join mode `smart`, defaults enabled).
+
+**Time limit** (`defaultMaxMinutes`, default `0` = none): minutes each run of an agent, a spawn or a resume, may take. When it runs out the run is aborted, which reaches the model call or tool in flight, and it ends as an error saying so, with any partial output; a user stop stays a stop. An `Agent` call's `max_minutes` overrides it for that agent. Read at startup; set it in `subagents.json`.
 
 **Nested depth** (`maxSubagentDepth`, default `2`): the hard ceiling on [nested delegation](#nested-subagents), counted from the main session (main = 0, its subagents = 1). `0` or `1` disables nesting project-wide regardless of any agent's `allowed_subagents`. Read when a subagent session is built, so a change applies to agents started after it.
 

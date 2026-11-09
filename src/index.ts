@@ -38,7 +38,7 @@ import { getPackageAgentsGate, getPackageWorkflowsGate, invalidatePackageCache, 
 import { SubagentScheduler } from "./schedule.js";
 import { resolveStorePath, ScheduleStore } from "./schedule-store.js";
 import { applyAndEmitLoaded, loadSettings, type SubagentsSettings, saveAndEmitChanged, type ToolDescriptionMode } from "./settings.js";
-import { getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
+import { describeNow, getForegroundOutcomeNote, getStatusNote, partialOutputSuffix } from "./status-note.js";
 import { type AgentConfig, type AgentInvocation, type AgentMentionMode, type AgentRecord, type JoinMode, type NotificationDetails, type SubagentType, type ViewerMarkdownMode, type WidgetMode } from "./types.js";
 import { createMentionProvider, mentionRoster, type TypeInfo } from "./ui/agent-mention.js";
 import {
@@ -1517,6 +1517,7 @@ export default function (pi: ExtensionAPI) {
       setMaxConcurrent: (n) => manager.setMaxConcurrent(n),
       setMaxConcurrentForeground: (n) => manager.setMaxConcurrentForeground(n),
       setDefaultMaxTurns,
+      setDefaultMaxMinutes: (n) => manager.setDefaultMaxMinutes(n),
       setGraceTurns,
       setDefaultJoinMode,
       setBackgroundByDefault,
@@ -1734,6 +1735,12 @@ Terse command-style prompts produce shallow, generic work.
         Type.Number({
           description: "Maximum number of agentic turns before stopping. Omit for unlimited (default).",
           minimum: 1,
+        }),
+      ),
+      max_minutes: Type.Optional(
+        Type.Number({
+          description: "Minutes each run may take before it is stopped as an error. Omit for the configured default.",
+          exclusiveMinimum: 0,
         }),
       ),
       run_in_background: Type.Optional(
@@ -2196,6 +2203,7 @@ Terse command-style prompts produce shallow, generic work.
           name: params.name as string | undefined,
           model,
           maxTurns: effectiveMaxTurns,
+          maxMinutes: params.max_minutes,
           isolated,
           inheritContext,
           thinkingLevel: thinking,
@@ -2348,6 +2356,7 @@ Terse command-style prompts produce shallow, generic work.
           name: params.name as string | undefined,
           model,
           maxTurns: effectiveMaxTurns,
+          maxMinutes: params.max_minutes,
           isolated,
           inheritContext,
           thinkingLevel: thinking,
@@ -2944,7 +2953,8 @@ Terse command-style prompts produce shallow, generic work.
         `Description: ${record.description}\n\n`;
 
       if (record.status === "running") {
-        output += "Agent is still running. Use wait: true or check back later.";
+        const now = describeNow(record);
+        output += `Agent is still running${now ? `: ${now}` : ""}. Use wait: true or check back later.`;
       } else if (record.status === "error") {
         output += `Error: ${record.error}${partialOutputSuffix(record)}`;
       } else {
@@ -3015,6 +3025,8 @@ Terse command-style prompts produce shallow, generic work.
         }
         stateParts.push(`${record.toolUses} tool ${record.toolUses === 1 ? "use" : "uses"}`);
         if (contextPercent !== null) stateParts.push(`context ${Math.round(contextPercent)}% full`);
+        const now = describeNow(record);
+        if (now) stateParts.push(now);
         if (record.compactionCount) stateParts.push(`${record.compactionCount} compaction${record.compactionCount === 1 ? "" : "s"}`);
         return textResult(
           `Steering message sent to agent ${record.id}. The agent will process it after its current tool execution.\n` +
@@ -3619,6 +3631,7 @@ Write the file using the write tool. Only write the file, nothing else.`;
       // 0 = unlimited — per SubagentsSettings.defaultMaxTurns docstring and
       // normalizeMaxTurns() in agent-runner.ts (which maps 0 → undefined).
       defaultMaxTurns: getDefaultMaxTurns() ?? 0,
+      defaultMaxMinutes: manager.getDefaultMaxMinutes() ?? 0,
       graceTurns: getGraceTurns(),
       defaultJoinMode: getDefaultJoinMode(),
       backgroundByDefault: getBackgroundByDefault(),

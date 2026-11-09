@@ -18,7 +18,7 @@ import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { Model } from "@earendil-works/pi-ai";
-import type { AgentSession, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentSession, AgentSessionEvent, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { resumeAgent, runAgent, type ToolActivity } from "./agent-runner.js";
 import { getAgentConfig } from "./agent-types.js";
 import { assignHandle, handleBase } from "./mention.js";
@@ -193,6 +193,8 @@ interface SpawnOptions {
   reclaim?: { handle: string; alias?: string };
   model?: Model<any>;
   maxTurns?: number;
+  /** Minutes each run may take; defaults to the manager's `defaultMaxMinutes`, 0 = no limit. */
+  maxMinutes?: number;
   isolated?: boolean;
   inheritContext?: boolean;
   thinkingLevel?: ThinkingLevel;
@@ -358,6 +360,33 @@ async function shutdownChildSession(session: AgentSession | undefined): Promise<
   try { session?.dispose?.(); } catch { /* ignore */ }
 }
 
+function timeLimitError(record: AgentRecord): string {
+  return `Stopped after ${record.maxMinutes} minutes, this agent's time limit (max_minutes). ` +
+    "It did not finish; any output is partial.";
+}
+
+/**
+ * Keep `record.now` on what the agent is doing: its oldest running tool call,
+ * else the model, since its request or last streamed output.
+ */
+function trackNow(record: AgentRecord): (event: AgentSessionEvent) => void {
+  const tools = new Map<string, { tool: string; since: number }>();
+  return (event) => {
+    if (event.type === "tool_execution_start") {
+      tools.set(event.toolCallId, { tool: event.toolName, since: Date.now() });
+    } else if (event.type === "tool_execution_end") {
+      tools.delete(event.toolCallId);
+    } else if (event.type === "agent_end") {
+      tools.clear();
+      record.now = undefined;
+      return;
+    } else if (event.type !== "turn_start" && event.type !== "message_update") {
+      return;
+    }
+    record.now = tools.values().next().value ?? { since: Date.now() };
+  };
+}
+
 export class AgentManager {
   private agents = new Map<string, AgentRecord>();
   private cleanupInterval: ReturnType<typeof setInterval>;
@@ -367,6 +396,7 @@ export class AgentManager {
   private onUsage?: OnAgentUsage;
   private maxConcurrent: number;
   private maxConcurrentForeground = DEFAULT_MAX_CONCURRENT_FOREGROUND;
+  private defaultMaxMinutes: number | undefined;
   /** Base repos worktrees were created from — so dispose() can prune them all,
    *  not just the parent repo (caller-supplied cwd can target other repos). */
   private worktreeRepos = new Set<string>();
@@ -432,6 +462,15 @@ export class AgentManager {
     this.maxConcurrent = Math.max(1, n);
     // Start queued agents if the new limit allows
     this.drainQueue();
+  }
+
+  /** Default minutes a run may take before it is stopped; undefined or 0 = no limit. */
+  setDefaultMaxMinutes(n: number | undefined) {
+    this.defaultMaxMinutes = n || undefined;
+  }
+
+  getDefaultMaxMinutes(): number | undefined {
+    return this.defaultMaxMinutes;
   }
 
   getMaxConcurrent(): number {
@@ -523,6 +562,7 @@ export class AgentManager {
       abortController,
       lifetimeUsage: { input: 0, output: 0, cacheWrite: 0, cost: 0 },
       compactionCount: 0,
+      maxMinutes: (options.maxMinutes ?? this.defaultMaxMinutes) || undefined,
       // Raw tri-state (not coerced to a boolean): true = background, false =
       // foreground (has an inline tool-result surface), undefined = caller never
       // declared it (e.g. a cross-extension RPC spawn). The widget's background-
@@ -779,6 +819,7 @@ export class AgentManager {
     if (options.signal?.aborted) this.abort(id);
     else this.armParentAbort(record, options.signal);
     const detach = () => this.detachParentAbort(record);
+    this.armTimeLimit(record);
 
     const promise = runAgent(ctx, type, prompt, {
       pi,
@@ -827,6 +868,9 @@ export class AgentManager {
       },
       onSessionCreated: (session) => {
         record.session = session;
+        // Kept for the session's life, so resumed runs are tracked too.
+        // Optional for the reason below: a stubbed session must not throw.
+        session.subscribe?.(trackNow(record));
         // Capture now, while the session object exists: after eviction this
         // path is the only thing that can reopen the conversation, and an
         // in-memory session reports undefined, which correctly means
@@ -869,12 +913,16 @@ export class AgentManager {
       },
     })
       .then(async ({ responseText, session, aborted, steered, failure, structuredJson, structuredRetried }) => {
+        clearTimeout(record.timeLimit);
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           // Precedence: a hard abort keeps "aborted"; then a failed final turn
           // (provider error that pi resolved instead of rejecting, #144) is an
           // honest "error" — not a completion with an empty or stale result.
-          if (aborted) {
+          if (record.timedOut) {
+            record.status = "error";
+            record.error = timeLimitError(record);
+          } else if (aborted) {
             record.status = "aborted";
           } else if (failure) {
             record.status = "error";
@@ -930,11 +978,12 @@ export class AgentManager {
         return responseText;
       })
       .catch(async (err) => {
+        clearTimeout(record.timeLimit);
         // Don't overwrite status if externally stopped via abort()
         if (record.status !== "stopped") {
           record.status = "error";
         }
-        record.error = err instanceof Error ? err.message : String(err);
+        record.error = record.timedOut ? timeLimitError(record) : err instanceof Error ? err.message : String(err);
         record.completedAt ??= Date.now();
 
         detach();
@@ -967,6 +1016,24 @@ export class AgentManager {
     // starts. Read off the options, so a spawn that started from a queue drain
     // still reaches the caller that queued it.
     options.onSpawned?.(id);
+  }
+
+  /**
+   * Stop the current run once it has taken `record.maxMinutes`. The abort
+   * reaches whatever is in flight, a model call or a tool, and the run's settle
+   * reports a time-limit error instead of a user stop.
+   */
+  private armTimeLimit(record: AgentRecord): void {
+    clearTimeout(record.timeLimit);
+    record.timedOut = false;
+    if (!record.maxMinutes) return;
+    const controller = record.abortController;
+    record.timeLimit = setTimeout(() => {
+      if (record.status !== "running" || record.abortController !== controller) return;
+      record.timedOut = true;
+      controller?.abort();
+    }, record.maxMinutes * 60_000);
+    record.timeLimit.unref?.();
   }
 
   /**
@@ -1299,6 +1366,7 @@ export class AgentManager {
     // than the previous one's settled controller.
     const abortController = new AbortController();
     record.abortController = abortController;
+    this.armTimeLimit(record);
     // Optional, and NOT what the Agent tool passes for a detached resume: a
     // parent signal aborts on the parent's own interrupt (user Esc), which is
     // right for a foreground run whose result the caller is awaiting, and wrong
@@ -1315,6 +1383,7 @@ export class AgentManager {
     try { options.onStarted?.(); } catch { /* ignore caller wiring errors */ }
 
     const settle = () => {
+      clearTimeout(record.timeLimit);
       detachParentSignal?.();
       detachParentSignal = undefined;
       // Final flush of streaming output file
@@ -1351,8 +1420,9 @@ export class AgentManager {
         if (record.status !== "stopped") {
           // Same contract as the spawn path (#144): a failed final turn is an
           // error, not a completion — but the resumed text stays available.
-          record.status = failure ? "error" : "completed";
-          if (failure) record.error = failure;
+          const error = record.timedOut ? timeLimitError(record) : failure;
+          record.status = error ? "error" : "completed";
+          if (error) record.error = error;
         }
         record.result = text;
         record.completedAt ??= Date.now();
@@ -1362,7 +1432,7 @@ export class AgentManager {
       .catch((err) => {
         if (record.status !== "stopped") {
           record.status = "error";
-          record.error = err instanceof Error ? err.message : String(err);
+          record.error = record.timedOut ? timeLimitError(record) : err instanceof Error ? err.message : String(err);
         }
         record.completedAt ??= Date.now();
         settle();
